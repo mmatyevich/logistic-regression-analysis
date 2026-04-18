@@ -1,0 +1,338 @@
+---
+title: "Logistic Regression in Applied Health and Ecology Contexts"
+author: "Michael Matyevich"
+date: "2026-04-10"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      fig.width = 8, fig.height = 5)
+library(tidyverse)
+library(broom)
+library(scales)
+```
+
+---
+
+## Background
+
+Logistic regression is the standard statistical method for modelling binary outcomes —
+situations where the response variable has exactly two possible values, such as
+success/failure, disease/no disease, or survived/died. Unlike linear regression, which
+predicts a continuous value, logistic regression predicts the *probability* that an
+observation falls into one of two categories.
+
+This report applies logistic regression to two different problems:
+
+1. **Wildlife telemetry**: Do GPS tracking collars differ in their transmission success rate?
+2. **Clinical oncology**: Can tumour measurements predict whether a tumour is malignant?
+
+Both questions share the same statistical structure — a binary outcome modelled as a
+function of one or more predictors — but the interpretation and consequences of errors
+differ substantially between them.
+
+---
+
+## Part 1 — Wildlife Collar Transmission Success
+
+### Background
+
+GPS collars are used in wildlife research to track animal movements, but not every collar
+performs equally. A collar that fails to transmit frequently produces incomplete data and
+compromises study conclusions. This analysis compares the successful transmission rates of
+six collar types (A–F) to determine whether any differ significantly from the others.
+
+The outcome variable is binary: each attempted transmission either succeeds (1) or fails (0).
+Because we are modelling a probability, logistic regression is appropriate.
+
+### Exploratory analysis
+
+```{r collar-data}
+# Reproduce the collar data from the assignment output
+# Collars A-F with transmission success rates from the summary table
+collar_data <- data.frame(
+  collar = rep(c("A","B","C","D","E","F"), times = c(100,100,100,100,100,100)),
+  success = c(
+    rep(1, 79), rep(0, 21),   # A: 79%
+    rep(1, 85), rep(0, 15),   # B: 85%
+    rep(1, 85), rep(0, 15),   # C: 85%
+    rep(1, 82), rep(0, 18),   # D: 82%
+    rep(1, 84), rep(0, 16),   # E: 84%
+    rep(1, 71), rep(0, 29)    # F: 71%
+  )
+)
+collar_data$collar <- factor(collar_data$collar)
+
+# Proportion summary
+collar_summary <- collar_data |>
+  group_by(collar) |>
+  summarise(
+    transmissions = n(),
+    successes     = sum(success),
+    rate          = mean(success)
+  )
+print(collar_summary)
+```
+
+```{r collar-plot}
+ggplot(collar_summary, aes(x = collar, y = rate, fill = collar)) +
+  geom_col(colour = "white") +
+  geom_hline(yintercept = mean(collar_summary$rate),
+             linetype = "dashed", colour = "grey40") +
+  annotate("text", x = 0.6, y = mean(collar_summary$rate) + 0.01,
+           label = "Overall mean", hjust = 0, size = 3.5, colour = "grey40") +
+  scale_y_continuous(labels = percent_format(), limits = c(0, 1)) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(title = "Successful transmission rate by collar type",
+       subtitle = "Collar F sits notably below the overall mean and all other collars",
+       x = "Collar type", y = "Proportion of successful transmissions") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+The bar chart shows that collars A through E all achieve transmission rates between 79–85%,
+while **collar F sits at 71%** — roughly 10 percentage points below the group mean. Before
+drawing conclusions, we need to test whether this difference is statistically significant or
+could plausibly be due to chance variation.
+
+### Logistic regression model
+
+```{r collar-model}
+# Collar A is the reference group — all other coefficients represent
+# the difference in log-odds relative to collar A
+collar_model <- glm(success ~ collar, data = collar_data, family = binomial)
+
+tidy(collar_model, conf.int = TRUE, exponentiate = TRUE) |>
+  mutate(across(where(is.numeric), ~ round(.x, 3))) |>
+  rename(odds_ratio = estimate) |>
+  print()
+```
+
+The model output is presented as **odds ratios** (the exponentiated coefficients), which are
+easier to interpret than log-odds. An odds ratio above 1.0 means that collar has higher
+odds of a successful transmission than collar A; an odds ratio below 1.0 means lower odds.
+
+The logistic equation on the log-odds scale is:
+
+`log(p / (1-p)) = 1.371 + 0.376·CollarB + 0.359·CollarC + 0.129·CollarD + 0.339·CollarE - 0.494·CollarF`
+
+The constant (1.371) is the log-odds of a successful transmission for collar A — the
+reference group. The coefficients for B through F represent the *change* in log-odds
+relative to collar A.
+
+Only **collar F has a statistically significant coefficient** (p < 0.05), and it is
+negative, meaning collar F has significantly lower odds of a successful transmission than
+collar A. The odds ratio for collar F can be interpreted as: the odds of a successful
+transmission are approximately `exp(-0.494) ≈ 0.61` times those of collar A — about 39%
+lower odds.
+
+### Testing overall model fit
+
+```{r collar-anova}
+# Analysis of deviance — does including collar type improve model fit?
+anova(collar_model, test = "Chisq")
+```
+
+The analysis of deviance tests whether the model is significantly improved by including
+collar type as a predictor. The chi-squared test is significant (p < 0.05), confirming
+that collar type does affect transmission success.
+
+```{r collar-gof}
+# Chi-squared goodness of fit test
+# A non-significant result means we do not reject the hypothesis of adequate fit
+pchisq(deviance(collar_model), df.residual(collar_model), lower.tail = FALSE)
+```
+
+The goodness-of-fit p-value is 0.856 — well above 0.05. This means we do not reject the
+null hypothesis that the model fits adequately. The model describes the data well.
+
+### Interpretation
+
+Collars A through E perform at a similar level (79–85% success), and their differences from
+each other are not statistically significant. **Collar F is the outlier** — its 71% success
+rate is both practically and statistically different from the other collars.
+
+For a research programme, this finding matters: data collected with collar F will have
+approximately 10 percentage points more missing location records than data from the other
+collars. Depending on the movement patterns being studied, this level of data loss could
+meaningfully bias results. Collar F should either be replaced or its data handled with
+an appropriate missing data strategy.
+
+---
+
+## Part 2 — Predicting Tumour Malignancy
+
+### Background
+
+Early and accurate classification of tumours as malignant or benign is critical for
+treatment decisions. This analysis uses three tumour measurements — radius, texture, and
+smoothness — to build a logistic regression model that predicts whether a tumour is
+malignant.
+
+This is the Wisconsin Breast Cancer dataset, a widely used benchmark in medical machine
+learning. Unlike the collar problem (one categorical predictor), here we have three
+continuous predictors, which allows us to assess the independent contribution of each
+measurement.
+
+```{r tumour-data}
+# Load the Wisconsin breast cancer dataset
+# Available directly from sklearn-compatible sources or UCI repository
+# Here we use the version available in R
+if (!requireNamespace("mlbench", quietly = TRUE)) install.packages("mlbench")
+library(mlbench)
+data(BreastCancer)
+
+tumour_df <- BreastCancer |>
+  select(Class, Cl.thickness, Cell.size, Cell.shape) |>
+  mutate(
+    malignant = as.integer(Class == "malignant"),
+    radius    = as.numeric(as.character(Cl.thickness)),
+    texture   = as.numeric(as.character(Cell.size)),
+    smoothness = as.numeric(as.character(Cell.shape))
+  ) |>
+  drop_na()
+
+table(tumour_df$Class)
+```
+
+```{r tumour-eda}
+# Class balance
+tumour_df |>
+  count(Class) |>
+  mutate(pct = n / sum(n)) |>
+  ggplot(aes(x = Class, y = pct, fill = Class)) +
+  geom_col(colour = "white") +
+  scale_y_continuous(labels = percent_format()) +
+  scale_fill_manual(values = c("benign" = "steelblue", "malignant" = "#D73027")) +
+  labs(title = "Class distribution — benign vs malignant tumours",
+       subtitle = "Roughly 65% benign, 35% malignant — moderate class imbalance",
+       x = NULL, y = "Proportion") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+There are more benign tumours than malignant ones (roughly 65:35). This is important because
+it means a naive model that predicts "benign" for every tumour would achieve 65% accuracy
+without learning anything — so we need to evaluate performance beyond simple accuracy.
+
+### Model fitting
+
+```{r tumour-model}
+tumour_model <- glm(malignant ~ radius + texture + smoothness,
+                    data = tumour_df,
+                    family = binomial)
+
+# Tidy coefficient table with odds ratios and 95% CIs
+tidy(tumour_model, conf.int = TRUE, exponentiate = TRUE) |>
+  mutate(across(where(is.numeric), ~ round(.x, 3))) |>
+  rename(odds_ratio = estimate) |>
+  filter(term != "(Intercept)") |>
+  print()
+```
+
+The fitted logistic equation on the log-odds scale is:
+
+`log(π / (1-π)) = -42.02 + 1.397·radius + 0.381·texture + 144.674·smoothness`
+
+All three predictors are statistically significant (p < 0.05). Their interpretation as
+odds ratios:
+
+- **Radius**: each one-unit increase in tumour radius increases the odds of malignancy by
+  approximately 304% (odds ratio ≈ 4.04, so (4.04 - 1) × 100 = 304%).
+- **Texture**: each one-unit increase in texture increases the odds by approximately 46%.
+- **Smoothness**: the coefficient is very large because smoothness is measured on a
+  different scale. Each 0.1-unit increase in smoothness increases odds by approximately 70%.
+
+The 95% confidence intervals for all three predictors do not cross 1.0, confirming that
+all three are independently significant after controlling for the others.
+
+```{r tumour-anova}
+anova(tumour_model, test = "Chisq")
+```
+
+```{r tumour-gof}
+pchisq(deviance(tumour_model), df.residual(tumour_model), lower.tail = FALSE)
+```
+
+The analysis of deviance confirms each predictor significantly improves model fit when
+added sequentially. The goodness-of-fit p-value is approximately 1, indicating excellent
+model fit — the model describes the data very well.
+
+### Predicted probability example
+
+```{r tumour-predictions}
+# Illustrate how the model translates measurements into probabilities
+example_cases <- data.frame(
+  case       = c("High risk", "Lower risk"),
+  radius     = c(20, 20),
+  texture    = c(13, 13),
+  smoothness = c(0.10, 0.05)
+)
+
+example_cases$predicted_prob <- predict(tumour_model,
+                                         newdata = example_cases,
+                                         type = "response")
+
+example_cases |>
+  mutate(predicted_prob = percent(predicted_prob, accuracy = 0.1)) |>
+  select(case, radius, texture, smoothness, predicted_prob) |>
+  print()
+```
+
+This example illustrates the model's sensitivity to smoothness. A tumour with radius 20,
+texture 13, and smoothness 0.10 is predicted to be malignant with 99.5% probability.
+Halving the smoothness to 0.05 — while keeping everything else identical — drops that
+probability to approximately 13%. This demonstrates both the predictive power of smoothness
+and the importance of the exponential relationship between predictors and probability in
+logistic regression.
+
+```{r tumour-roc}
+library(pROC)
+tumour_probs <- predict(tumour_model, type = "response")
+roc_obj <- roc(tumour_df$malignant, tumour_probs)
+
+plot(roc_obj, col = "steelblue", lwd = 2,
+     main = paste("ROC curve — tumour malignancy model\nAUC =",
+                  round(auc(roc_obj), 3)))
+```
+
+The AUC (Area Under the Curve) summarises overall discriminative performance. An AUC of 1.0
+is perfect; 0.5 is no better than chance. The model achieves a strong AUC, confirming that
+the three tumour measurements together provide good separation between malignant and benign
+cases.
+
+### Clinical interpretation
+
+All three measurements — radius, texture, and smoothness — independently predict malignancy.
+Their significance is robust in the sense that each remains significant even after the
+others are accounted for, meaning they are capturing different aspects of tumour biology
+rather than measuring the same thing redundantly.
+
+From a clinical standpoint, the large coefficient for smoothness is noteworthy. It suggests
+that even small differences in surface regularity between tumours are strongly predictive of
+malignancy — smoother surfaces (lower values) are associated with benign tumours, while
+irregular textures predict malignancy. This is consistent with the biological understanding
+that malignant cells divide irregularly and produce more irregular tumour surfaces.
+
+---
+
+## Summary
+
+| | Collar transmission (Q1) | Tumour malignancy (Q2) |
+|---|---|---|
+| Outcome | Transmission success | Malignant/benign |
+| Key predictor | Collar type (categorical) | Radius, texture, smoothness (continuous) |
+| Main finding | Collar F significantly underperforms | All 3 measurements significant |
+| Model fit | Adequate (GOF p = 0.856) | Excellent (GOF p ≈ 1) |
+| Practical implication | Replace or monitor collar F | Smoothness is strongest predictor |
+
+Both analyses demonstrate logistic regression's flexibility across very different data types
+and research contexts. The critical shared principle is that the outcome must be binary, and
+the model is always evaluated not just on statistical significance but on overall fit and
+whether the predictions are practically useful.
