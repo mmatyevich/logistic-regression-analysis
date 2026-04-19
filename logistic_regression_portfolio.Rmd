@@ -54,7 +54,10 @@ Because we are modelling a probability, logistic regression is appropriate.
 ### Exploratory analysis
 
 ```{r collar-data}
-# Reproduce the collar data from the assignment output
+# Original dataset was not available, so a synthetic dataset was created
+# based on reported transmission success rates for each collar.
+# This allows demonstration of the modelling approach, but does not
+# reflect real-world variability in the data.
 # Collars A-F with transmission success rates from the summary table
 collar_data <- data.frame(
   collar = rep(c("A","B","C","D","E","F"), times = c(100,100,100,100,100,100)),
